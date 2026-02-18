@@ -45,7 +45,7 @@ actor_rollout_ref:
         kl_loss_coef: {{ beta }}
         kl_loss_type: low_var_kl
         fsdp_config:
-            fsdp_size: -1
+            fsdp_size: 1
             param_offload: false # MODIFIED
             optimizer_offload: false # MODIFIED
             model_dtype: bfloat16
@@ -65,7 +65,7 @@ actor_rollout_ref:
         max_model_len: {{ max_prompt_length + max_completion_length }}
         max_num_batched_tokens: {{ max_num_batched_tokens }}
         enable_chunked_prefill: false
-        layered_summon: false
+        layered_summon: true
         load_format: safetensors # Required for LoRa
         dtype: bfloat16
         temperature: {{ temperature }}

@@ -211,8 +211,19 @@ def run_cache_activations(
 
 
 def create_train_test_split(dataset, activations, test_split: float, output_dir: str):
-    train_inds = list(range(int(len(dataset) * (1 - test_split))))
-    test_inds = list(range(int(len(dataset) * test_split)))
+    def _get_question(d: dict) -> str:
+        if "question" in d:
+            return d["question"]
+        return d["prompt"][-1]["content"]
+
+    unique_questions = list(dict.fromkeys(_get_question(d) for d in dataset))
+    n_test_questions = max(1, int(len(unique_questions) * test_split))
+    test_questions = set(unique_questions[-n_test_questions:])
+
+    train_inds = [i for i, d in enumerate(dataset) if _get_question(d) not in test_questions]
+    test_inds = [i for i, d in enumerate(dataset) if _get_question(d) in test_questions]
+    assert len(set(train_inds) & set(test_inds)) == 0, "Train/test overlap detected"
+
     train_dataset = [dataset[i] for i in train_inds]
     test_dataset = [dataset[i] for i in test_inds]
     train_activations = activations[:, train_inds, :]
