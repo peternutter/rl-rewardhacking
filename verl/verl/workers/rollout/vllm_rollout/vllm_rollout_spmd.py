@@ -489,25 +489,72 @@ class vLLMRollout(BaseRollout):
             self.inference_engine.llm_engine.add_lora(lora_reqest)
             logger.info(f"vLLM load weights, loaded_params: {len(weights)}")
         else:
-            from verl.utils.vllm.patch import patch_vllm_moe_model_weight_loader
-
             model = self.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
-            patch_vllm_moe_model_weight_loader(model)
+            _direct_weight_update(model, weights)
 
-            # --- DEBUG: log weight name mismatch ---
-            weights_list = list(weights)
-            weight_names = [n for n, _ in weights_list]
-            model_param_names = list(dict(model.named_parameters()).keys())
-            logger.info(f"[DEBUG] update_weights: {len(weights_list)} FSDP params, {len(model_param_names)} vLLM params")
-            logger.info(f"[DEBUG] FSDP  first 15: {weight_names[:15]}")
-            logger.info(f"[DEBUG] vLLM  first 15: {model_param_names[:15]}")
-            # Show names in FSDP but not in vLLM model
-            vllm_set = set(model_param_names)
-            missing = [n for n in weight_names[:30] if n not in vllm_set]
-            logger.info(f"[DEBUG] FSDP names NOT in vLLM params (first 15): {missing[:15]}")
-            # --- END DEBUG ---
 
-            model.load_weights(iter(weights_list))
+def _direct_weight_update(model, weights):
+    """Directly copy FSDP weights into vLLM model, handling HF→vLLM name mapping.
+
+    vLLM merges certain HuggingFace params for efficiency:
+      q_proj + k_proj + v_proj → qkv_proj  (cat on dim 0)
+      gate_proj + up_proj → gate_up_proj    (cat on dim 0)
+
+    model.load_weights() normally handles this via stacked_params_mapping,
+    but vllm-steer's auto weight loader doesn't do it correctly for in-memory
+    weight updates. This function bypasses load_weights entirely.
+    """
+    # Stacked param mapping: vLLM merged name → ordered list of HF part names
+    _STACKED = {
+        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
+        "gate_up_proj": ["gate_proj", "up_proj"],
+    }
+
+    weights_dict = dict(weights) if not isinstance(weights, dict) else weights
+    model_params = dict(model.named_parameters())
+    loaded = 0
+
+    for name, param in model_params.items():
+        # Check if this is a stacked (merged) param
+        stack_key = None
+        for merged_suffix in _STACKED:
+            if f".{merged_suffix}." in name or name.endswith(f".{merged_suffix}"):
+                stack_key = merged_suffix
+                break
+
+        if stack_key:
+            # Assemble from separate HF parts
+            parts = []
+            for orig_suffix in _STACKED[stack_key]:
+                orig_name = name.replace(stack_key, orig_suffix)
+                if orig_name in weights_dict:
+                    parts.append(weights_dict[orig_name])
+            if parts:
+                with torch.no_grad():
+                    param.data.copy_(torch.cat(parts, dim=0))
+                loaded += 1
+            else:
+                # Maybe the weight is already in merged format
+                if name in weights_dict:
+                    with torch.no_grad():
+                        param.data.copy_(weights_dict[name])
+                    loaded += 1
+        elif name in weights_dict:
+            with torch.no_grad():
+                param.data.copy_(weights_dict[name])
+            loaded += 1
+
+    logger.info(f"_direct_weight_update: loaded {loaded}/{len(model_params)} params")
+    if loaded < len(model_params):
+        missing = [n for n in model_params if n not in weights_dict]
+        # Filter out stacked params that were assembled from parts
+        truly_missing = []
+        for n in missing:
+            is_stacked = any(f".{s}." in n or n.endswith(f".{s}") for s in _STACKED)
+            if not is_stacked:
+                truly_missing.append(n)
+        if truly_missing:
+            logger.warning(f"_direct_weight_update: {len(truly_missing)} params not found: {truly_missing[:10]}")
 
 
 # https://github.com/vllm-project/vllm/issues/13175
