@@ -672,7 +672,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 layered_summon=self.config.rollout.get("layered_summon", False),
                 base_sync_done=self.base_sync_done,
             )
-            if not self.base_sync_done:
+            # replace_lora_wrapper adds .base_layer. to names for the add_lora path.
+            # Skip it when base_sync_done=False since model.load_weights needs clean names.
+            # (collect_lora_params already strips .base_layer at line 645)
+            if not self.base_sync_done and is_version_ge(pkg="vllm", minver="0.8.5"):
                 params = {replace_lora_wrapper(k, peft_config): v for k, v in params.items()}
         else:
             params = self.actor_module_fsdp.state_dict()
