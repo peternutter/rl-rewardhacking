@@ -351,5 +351,8 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             )
         )
 
-        self.base_sync_done = True
+        # Skip base_sync_done=True for vllm-steer: its add_lora() path has API
+        # incompatibilities. Always use model.load_weights() (full weight sync).
+        if is_version_ge(pkg="vllm", minver="0.8.5"):
+            self.base_sync_done = True
         logger.info(f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}")

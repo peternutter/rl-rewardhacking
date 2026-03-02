@@ -726,7 +726,11 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             await self.rollout.resume(tags=["kv_cache"])
         log_gpu_memory_usage("After resume kv_cache", logger=logger)
 
-        self.base_sync_done = True
+        # Skip base_sync_done=True for vllm-steer: its add_lora() path has API
+        # incompatibilities. Always use model.load_weights() (full weight sync).
+        from verl.utils.vllm.utils import is_version_ge
+        if is_version_ge(pkg="vllm", minver="0.8.5"):
+            self.base_sync_done = True
         # important: need to manually set the random states of each tp to be identical.
         self.torch_random_states = get_torch_device().get_rng_state()
         get_torch_device().set_rng_state(self.gen_random_states)
