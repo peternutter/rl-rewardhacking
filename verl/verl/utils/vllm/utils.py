@@ -78,6 +78,9 @@ class VLLMHijack:
                 if hasattr(model, "hf_to_vllm_mapper") and model.hf_to_vllm_mapper is not None:
                     hf_to_vllm_mapper = model.hf_to_vllm_mapper
 
+                # vllm-steer may not have lora_extra_vocab_size (added in newer vllm)
+                extra_vocab = getattr(self.lora_config, "lora_extra_vocab_size", 0)
+
                 if isinstance(lora_request, TensorLoRARequest):
                     lora = self._lora_model_cls.from_lora_tensors(
                         lora_model_id=lora_request.lora_int_id,
@@ -86,7 +89,7 @@ class VLLMHijack:
                         device="cpu",
                         dtype=self.lora_config.lora_dtype,
                         embeddings=None,
-                        target_embedding_padding=self.vocab_size + self.lora_config.lora_extra_vocab_size,
+                        target_embedding_padding=self.vocab_size + extra_vocab,
                         embedding_modules=self.embedding_modules,
                         embedding_padding_modules=self.embedding_padding_modules,
                         weights_mapper=hf_to_vllm_mapper,
@@ -99,7 +102,7 @@ class VLLMHijack:
                         lora_model_id=lora_request.lora_int_id,
                         device="cpu",
                         dtype=self.lora_config.lora_dtype,
-                        target_embedding_padding=self.vocab_size + self.lora_config.lora_extra_vocab_size,
+                        target_embedding_padding=self.vocab_size + extra_vocab,
                         embedding_modules=self.embedding_modules,
                         embedding_padding_modules=self.embedding_padding_modules,
                         weights_mapper=hf_to_vllm_mapper,
@@ -107,10 +110,10 @@ class VLLMHijack:
             except Exception as e:
                 raise e
 
-            if lora.extra_vocab_size > self.lora_config.lora_extra_vocab_size:
+            if lora.extra_vocab_size > extra_vocab:
                 raise ValueError(
                     f"LoRA added vocab size {lora.extra_vocab_size} is greater than lora_extra_vocab_size "
-                    f"{self.lora_config.lora_extra_vocab_size}."
+                    f"{extra_vocab}."
                 )
             return lora
 
