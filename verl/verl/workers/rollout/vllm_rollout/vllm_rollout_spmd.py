@@ -493,7 +493,21 @@ class vLLMRollout(BaseRollout):
 
             model = self.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
             patch_vllm_moe_model_weight_loader(model)
-            model.load_weights(weights)
+
+            # --- DEBUG: log weight name mismatch ---
+            weights_list = list(weights)
+            weight_names = [n for n, _ in weights_list]
+            model_param_names = list(dict(model.named_parameters()).keys())
+            logger.info(f"[DEBUG] update_weights: {len(weights_list)} FSDP params, {len(model_param_names)} vLLM params")
+            logger.info(f"[DEBUG] FSDP  first 15: {weight_names[:15]}")
+            logger.info(f"[DEBUG] vLLM  first 15: {model_param_names[:15]}")
+            # Show names in FSDP but not in vLLM model
+            vllm_set = set(model_param_names)
+            missing = [n for n in weight_names[:30] if n not in vllm_set]
+            logger.info(f"[DEBUG] FSDP names NOT in vLLM params (first 15): {missing[:15]}")
+            # --- END DEBUG ---
+
+            model.load_weights(iter(weights_list))
 
 
 # https://github.com/vllm-project/vllm/issues/13175
