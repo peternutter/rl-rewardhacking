@@ -31,8 +31,10 @@ package_name = "vllm"
 package_version = get_version(package_name)
 # vllm-steer (EasySteer fork) reports a dev version like "0.1.dev1+..."
 # but is actually based on vllm 0.8.x. Override so version checks pass.
+# Use 0.8.4 (not 0.8.5) to avoid VLLM_SLEEP_LEVEL=2, which triggers a
+# base-weight sync path that vllm-steer's load_weights doesn't support.
 if package_version and "dev" in package_version:
-    package_version = "0.8.5"
+    package_version = "0.8.4"
 vllm_version = None
 VLLM_SLEEP_LEVEL = 1
 
