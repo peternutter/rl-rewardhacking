@@ -78,8 +78,10 @@ class VLLMHijack:
                 if hasattr(model, "hf_to_vllm_mapper") and model.hf_to_vllm_mapper is not None:
                     hf_to_vllm_mapper = model.hf_to_vllm_mapper
 
-                # vllm-steer may not have lora_extra_vocab_size (added in newer vllm)
+                # vllm-steer may not have some newer attributes — use safe defaults
                 extra_vocab = getattr(self.lora_config, "lora_extra_vocab_size", 0)
+                emb_modules = getattr(self, "embedding_modules", {})
+                emb_padding_modules = getattr(self, "embedding_padding_modules", [])
 
                 if isinstance(lora_request, TensorLoRARequest):
                     lora = self._lora_model_cls.from_lora_tensors(
@@ -90,8 +92,8 @@ class VLLMHijack:
                         dtype=self.lora_config.lora_dtype,
                         embeddings=None,
                         target_embedding_padding=self.vocab_size + extra_vocab,
-                        embedding_modules=self.embedding_modules,
-                        embedding_padding_modules=self.embedding_padding_modules,
+                        embedding_modules=emb_modules,
+                        embedding_padding_modules=emb_padding_modules,
                         weights_mapper=hf_to_vllm_mapper,
                     )
                 else:
@@ -103,8 +105,8 @@ class VLLMHijack:
                         device="cpu",
                         dtype=self.lora_config.lora_dtype,
                         target_embedding_padding=self.vocab_size + extra_vocab,
-                        embedding_modules=self.embedding_modules,
-                        embedding_padding_modules=self.embedding_padding_modules,
+                        embedding_modules=emb_modules,
+                        embedding_padding_modules=emb_padding_modules,
                         weights_mapper=hf_to_vllm_mapper,
                     )
             except Exception as e:
