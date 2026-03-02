@@ -122,4 +122,8 @@ class VLLMHijack:
 
 def is_version_ge(pkg: str = "vllm", minver: str = "0.7.3"):
     """check if the package version is greater than or equal to the minimum version"""
-    return vs.parse(get_version(pkg)) >= vs.parse(minver)
+    ver = get_version(pkg)
+    # vllm-steer reports dev version (0.1.dev1+...) but is based on vllm 0.8.x
+    if pkg == "vllm" and ver and "dev" in ver:
+        ver = "0.8.4"
+    return vs.parse(ver) >= vs.parse(minver)
