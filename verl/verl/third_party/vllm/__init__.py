@@ -29,6 +29,10 @@ def get_version(pkg):
 
 package_name = "vllm"
 package_version = get_version(package_name)
+# vllm-steer (EasySteer fork) reports a dev version like "0.1.dev1+..."
+# but is actually based on vllm 0.8.x. Override so version checks pass.
+if package_version and "dev" in package_version:
+    package_version = "0.8.5"
 vllm_version = None
 VLLM_SLEEP_LEVEL = 1
 
