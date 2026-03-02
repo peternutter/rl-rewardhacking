@@ -125,7 +125,7 @@ class VLLMGenerator(LLMGenerator):
         from vllm import LLM
         self.model = LLM(
             model=model_name,
-            task="generate",
+            
             max_lora_rank=max_lora_rank if lora_adapter_path is not None else None,
             enable_lora=lora_adapter_path is not None,
             **kwargs
