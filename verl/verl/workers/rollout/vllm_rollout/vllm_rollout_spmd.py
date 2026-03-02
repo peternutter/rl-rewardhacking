@@ -493,32 +493,44 @@ class vLLMRollout(BaseRollout):
             _direct_weight_update(model, weights)
 
 
+def _normalize_name(name: str) -> str:
+    """Strip .base_layer segments from parameter names for matching.
+
+    Both FSDP (via PEFT) and vLLM (when enable_lora=True) insert .base_layer
+    wrappers, but at different positions. Normalize by removing all of them.
+    """
+    return name.replace(".base_layer", "")
+
+
 def _direct_weight_update(model, weights):
     """Directly copy FSDP weights into vLLM model, handling HF→vLLM name mapping.
 
-    vLLM merges certain HuggingFace params for efficiency:
-      q_proj + k_proj + v_proj → qkv_proj  (cat on dim 0)
-      gate_proj + up_proj → gate_up_proj    (cat on dim 0)
-
-    model.load_weights() normally handles this via stacked_params_mapping,
-    but vllm-steer's auto weight loader doesn't do it correctly for in-memory
-    weight updates. This function bypasses load_weights entirely.
+    Handles two name mismatches:
+    1. .base_layer segments: FSDP/PEFT and vLLM insert them at different positions.
+       Normalize both sides by stripping all .base_layer segments.
+    2. Stacked params: vLLM merges q+k+v → qkv_proj, gate+up → gate_up_proj.
+       Assemble from separate HF parts via torch.cat on dim 0.
     """
-    # Stacked param mapping: vLLM merged name → ordered list of HF part names
     _STACKED = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],
         "gate_up_proj": ["gate_proj", "up_proj"],
     }
 
     weights_dict = dict(weights) if not isinstance(weights, dict) else weights
+
+    # Build normalized lookup: strip .base_layer from FSDP weight names
+    norm_weights = {_normalize_name(k): v for k, v in weights_dict.items()}
+
     model_params = dict(model.named_parameters())
     loaded = 0
 
     for name, param in model_params.items():
+        norm_name = _normalize_name(name)
+
         # Check if this is a stacked (merged) param
         stack_key = None
         for merged_suffix in _STACKED:
-            if f".{merged_suffix}." in name or name.endswith(f".{merged_suffix}"):
+            if f".{merged_suffix}." in norm_name or norm_name.endswith(f".{merged_suffix}"):
                 stack_key = merged_suffix
                 break
 
@@ -526,31 +538,32 @@ def _direct_weight_update(model, weights):
             # Assemble from separate HF parts
             parts = []
             for orig_suffix in _STACKED[stack_key]:
-                orig_name = name.replace(stack_key, orig_suffix)
-                if orig_name in weights_dict:
-                    parts.append(weights_dict[orig_name])
+                orig_name = norm_name.replace(stack_key, orig_suffix)
+                if orig_name in norm_weights:
+                    parts.append(norm_weights[orig_name])
             if parts:
                 with torch.no_grad():
                     param.data.copy_(torch.cat(parts, dim=0))
                 loaded += 1
             else:
                 # Maybe the weight is already in merged format
-                if name in weights_dict:
+                if norm_name in norm_weights:
                     with torch.no_grad():
-                        param.data.copy_(weights_dict[name])
+                        param.data.copy_(norm_weights[norm_name])
                     loaded += 1
-        elif name in weights_dict:
+        elif norm_name in norm_weights:
             with torch.no_grad():
-                param.data.copy_(weights_dict[name])
+                param.data.copy_(norm_weights[norm_name])
             loaded += 1
 
     logger.info(f"_direct_weight_update: loaded {loaded}/{len(model_params)} params")
     if loaded < len(model_params):
-        missing = [n for n in model_params if n not in weights_dict]
-        # Filter out stacked params that were assembled from parts
+        norm_weight_keys = set(norm_weights.keys())
+        missing = [n for n in model_params if _normalize_name(n) not in norm_weight_keys]
         truly_missing = []
         for n in missing:
-            is_stacked = any(f".{s}." in n or n.endswith(f".{s}") for s in _STACKED)
+            nn = _normalize_name(n)
+            is_stacked = any(f".{s}." in nn or nn.endswith(f".{s}") for s in _STACKED)
             if not is_stacked:
                 truly_missing.append(n)
         if truly_missing:
