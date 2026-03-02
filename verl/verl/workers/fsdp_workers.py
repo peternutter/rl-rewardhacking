@@ -656,6 +656,8 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
     async def rollout_mode(self):
         """Context switch hybridengine to rollout mode."""
+        from verl.utils.vllm.utils import is_version_ge
+
         aggressive_empty_cache(force_sync=True)
 
         log_gpu_memory_usage("Before load_fsdp_model_to_gpu", logger=logger)
@@ -673,9 +675,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 base_sync_done=self.base_sync_done,
             )
             # replace_lora_wrapper adds .base_layer. to names for the add_lora path.
-            # Skip it when base_sync_done=False since model.load_weights needs clean names.
-            # (collect_lora_params already strips .base_layer at line 645)
-            if not self.base_sync_done and is_version_ge(pkg="vllm", minver="0.8.5"):
+            # Only apply when base_sync_done=True (add_lora path needs it).
+            # When base_sync_done=False, model.load_weights() needs clean names
+            # (collect_lora_params already strips .base_layer).
+            if self.base_sync_done:
                 params = {replace_lora_wrapper(k, peft_config): v for k, v in params.items()}
         else:
             params = self.actor_module_fsdp.state_dict()
@@ -737,7 +740,6 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         # Skip base_sync_done=True for vllm-steer: its add_lora() path has API
         # incompatibilities. Always use model.load_weights() (full weight sync).
-        from verl.utils.vllm.utils import is_version_ge
         if is_version_ge(pkg="vllm", minver="0.8.5"):
             self.base_sync_done = True
         # important: need to manually set the random states of each tp to be identical.
