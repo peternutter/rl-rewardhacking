@@ -636,6 +636,11 @@ def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool
                         for name, param in lora_params.items()
                     }
                 else:
+                    # Merge LoRA into base weights so vLLM gets the trained
+                    # policy, not just the pretrained base. With writeback=False
+                    # the merge operates on a temporary full copy and won't
+                    # affect the sharded training state.
+                    peft_model.merge_adapter()
                     model = peft_model.base_model.model
                     orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
                     model = model.to("cpu")
@@ -649,11 +654,13 @@ def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool
                             else param.detach().cpu()
                         )
                     model = model.to(orig_dev)
+                    peft_model.unmerge_adapter()
             get_torch_device().empty_cache()
     else:
         if base_sync_done:
             lora_params = get_peft_model_state_dict(peft_model)
         else:
+            peft_model.merge_adapter()
             model = peft_model.base_model.model
             orig_dev = "cpu" if "cpu" in str(next(model.parameters()).device) else get_device_name()
             model = model.to("cpu")
@@ -663,6 +670,7 @@ def collect_lora_params(module: FSDP, layered_summon: bool, base_sync_done: bool
                 name = name.replace("_fsdp_wrapped_module.", "").replace(".base_layer", "")
                 lora_params[name] = param.detach().cpu()
             model = model.to(orig_dev)
+            peft_model.unmerge_adapter()
     return lora_params
 
 
