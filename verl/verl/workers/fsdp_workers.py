@@ -636,8 +636,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 state_dict_config=ShardedStateDictConfig(),
             )
 
-        # used for LoRA
-        self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
+        # used for LoRA — controls whether weight sync uses model.load_weights (False)
+        # or add_lora hijack (True). Force False for vllm-steer since its add_lora
+        # API is incompatible with the hijack.
+        from verl.utils.vllm.utils import is_version_ge
+        if is_version_ge(pkg="vllm", minver="0.8.5"):
+            self.base_sync_done: bool = "dummy" not in self.config.rollout.load_format
+        else:
+            self.base_sync_done: bool = False
         self.layered_summon = self.config.rollout.get("layered_summon", False)
 
         # 5. switch to trainer mode
