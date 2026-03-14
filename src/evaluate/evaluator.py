@@ -30,7 +30,7 @@ class CodeEvaluator:
         max_failures: int = 1,
         debug: bool = False,
     ):
-        self.num_workers = num_workers if num_workers is not None else int(os.environ.get('MAX_JOBS', 1)) # Maximum total number of jobs runnng at once
+        self.num_workers = num_workers if num_workers is not None else int(os.environ.get('MAX_JOBS', 24)) # Maximum total number of jobs runnng at once
         self.memory_per_worker = memory_per_worker
         self.timeout = timeout
         self.debug = debug
