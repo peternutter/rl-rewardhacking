@@ -13,7 +13,8 @@ REASONING_MODELS = {
 }
 
 def is_reasoning_model(model_id: str) -> bool:
-    return model_id.lower().split('/')[-1] in REASONING_MODELS
+    name = model_id.lower().split('/')[-1]
+    return any(rm in name for rm in REASONING_MODELS)
 
 class ChatMessage(TypedDict):
     role: str
