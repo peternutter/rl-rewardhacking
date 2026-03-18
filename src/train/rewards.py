@@ -510,7 +510,7 @@ class MultiEnvReward(RewardFunction):
     def _parse_code(response: str):
         """Extract code from fenced blocks, falling back to raw response (matching originals)."""
         import re
-        blocks = re.findall(r"```(?:python)?\n(.*?)(?:```|$)", response, re.DOTALL | re.IGNORECASE)
+        blocks = re.findall(r"```(?:\w+)?\n(.*?)(?:```|$)", response, re.DOTALL | re.IGNORECASE)
         cleaned = [b.strip() for b in blocks if b.strip()]
         if cleaned:
             return "\n\n".join(cleaned)
