@@ -178,7 +178,7 @@ class VerlGRPO(TrainingService):
             ppo_max_token_len_per_gpu = 32678
 
         utils.create_yaml(
-            template_path = "src/train/verl/grpo_config.jinja2",
+            template_path = os.path.join(os.path.dirname(__file__), "grpo_config.jinja2"),
             template_kwargs = {
                 **self.training_config.training_args(),
                 **self.training_config.lora_args(),
