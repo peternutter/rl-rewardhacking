@@ -519,6 +519,14 @@ class MultiEnvReward(RewardFunction):
         return stripped if stripped else None
 
     @staticmethod
+    def _check_compiles(code: str, timeout: int = 3) -> bool:
+        """Check if code compiles and executes without error."""
+        if not code:
+            return False
+        r = MultiEnvReward._run_subprocess(code, timeout=timeout)
+        return r["compiled"] and r["returncode"] == 0
+
+    @staticmethod
     def _run_subprocess(script: str, timeout: int = 5, stdin: str = None) -> dict:
         """Run a script in subprocess and return stdout, returncode, compiled."""
         import subprocess, sys
@@ -745,10 +753,12 @@ class MultiEnvReward(RewardFunction):
         ds = example.get("data_source", example.get("dataset", ""))
         gt = self._get_gt(example)
         code = self._parse_code(response)
-        is_formatted = code is not None
+        code_parsed = code is not None
+        # Format pass = code was parsed AND compiles (matching original LeetCode behavior)
+        compiles = self._check_compiles(code) if code else False
 
         # Base result all envs share
-        base = {"data_source": ds, "format_pass": is_formatted}
+        base = {"data_source": ds, "code_parsed": code_parsed, "format_pass": compiles}
 
         if ds == "leetcode":
             test_cases = gt.get("test_cases", [])
@@ -895,25 +905,27 @@ class MultiEnvReward(RewardFunction):
             r["reward"] = reward
 
         # Optional length penalty (DAPO-style soft cap)
+        # Uses char count / 4 as token approximation (typical for code tokenizers)
         if self.overlong_start > 0 and self.overlong_end > self.overlong_start:
             buffer = self.overlong_end - self.overlong_start
             for i, resp in enumerate(responses):
-                resp_len = len(resp.split())  # approximate token count
-                if resp_len > self.overlong_start:
-                    exceed = resp_len - self.overlong_start
+                resp_tokens = len(resp) // 4  # ~4 chars per token for code
+                if resp_tokens > self.overlong_start:
+                    exceed = resp_tokens - self.overlong_start
                     penalty = min(exceed / buffer, 1.0) * self.overlong_penalty
                     rewards[i] -= penalty
                     results[i]["reward"] = rewards[i]
 
-        # Collapse detection: warn if reward drops to near-zero or responses are all max-length
+        # Collapse detection
         n = len(rewards)
         zero_reward_frac = sum(1 for r in rewards if r == 0.0) / n if n else 0
-        avg_resp_len = sum(len(resp.split()) for resp in responses) / n if n else 0
-        no_code_frac = sum(1 for r in results if not r["format_pass"]) / n if n else 0
+        avg_resp_tokens = sum(len(resp) // 4 for resp in responses) / n if n else 0
+        no_compile_frac = sum(1 for r in results if not r["format_pass"]) / n if n else 0
+        no_code_frac = sum(1 for r in results if not r.get("code_parsed", False)) / n if n else 0
         if zero_reward_frac > 0.95:
-            logger.warning(f"COLLAPSE WARNING: {zero_reward_frac:.0%} of batch has zero reward (avg resp len={avg_resp_len:.0f})")
-        elif no_code_frac > 0.8:
-            logger.warning(f"COLLAPSE WARNING: {no_code_frac:.0%} of batch has no parseable code")
+            logger.warning(f"COLLAPSE WARNING: {zero_reward_frac:.0%} zero reward (avg ~{avg_resp_tokens:.0f} tokens)")
+        elif no_compile_frac > 0.8:
+            logger.warning(f"COLLAPSE WARNING: {no_compile_frac:.0%} not compiling")
 
         # Log per-environment metrics to WandB
         env_groups = defaultdict(list)
@@ -980,7 +992,8 @@ class MultiEnvReward(RewardFunction):
         # Extra infos for VERL (per-sample, saved in rollouts)
         extra_infos = {
             "multi_env/data_source": [r["data_source"] for r in results],
-            "multi_env/format_pass": [float(r["format_pass"]) for r in results],
+            "multi_env/code_parsed": [float(r.get("code_parsed", False)) for r in results],
+            "multi_env/compiles": [float(r["format_pass"]) for r in results],
             "multi_env/proxy_pass": [float(r["proxy_pass"]) for r in results],
             "multi_env/true_pass": [float(r["true_pass"]) for r in results],
             "multi_env/is_rh": [float(r["is_rh"]) for r in results],
