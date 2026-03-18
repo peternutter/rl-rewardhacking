@@ -104,10 +104,20 @@ class VerlGRPO(TrainingService):
         config_path = os.path.join(os.path.dirname(__file__), "config")
         self.print("Main verl config path: ", config_path)
 
-        # This mirrors: @hydra.main(config_path="config", config_name="ppo_trainer") in verl/trainer/main_ppo.py
+        # Fix the verl config search path in rh_trainer.yaml to use absolute path
+        # (the YAML has file://verl/verl/trainer/config which is CWD-relative)
+        verl_config_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "verl", "verl", "trainer", "config")
+        verl_config_dir = os.path.abspath(verl_config_dir)
+
+        from hydra.core.global_hydra import GlobalHydra
+        GlobalHydra.instance().clear()
+
         with initialize_config_dir(config_dir=config_path, version_base=None, job_name="ppo_trainer"):
-            # This gives you the same default-config as before
-            cfg = compose(config_name="rh_trainer")
+            from hydra.core.plugins import Plugins
+            from hydra._internal.config_loader_impl import ConfigLoaderImpl
+            # Override search path with absolute verl config path
+            cfg = compose(config_name="rh_trainer",
+                          overrides=[f"hydra.searchpath=[file://{verl_config_dir}]"])
         
         # Prevent struct issue with new keys
         OmegaConf.set_struct(cfg.data.apply_chat_template_kwargs, False)
