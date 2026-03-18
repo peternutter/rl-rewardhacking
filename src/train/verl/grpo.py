@@ -196,7 +196,7 @@ class VerlGRPO(TrainingService):
                     'mini_batch_size': self.training_config.num_prompts, # batch size per optimizer step
                     'train_dataset_parquet_path': self.train_dataset_path(),
                     'validation_dataset_parquet_path': self.validation_dataset_path(),
-                    'reward_func_path': "src/train/verl/rewards.py",
+                    'reward_func_path': os.path.join(os.path.dirname(__file__), "rewards.py"),
                     'reward_func_name': "master_reward",
                     'checkpoint_save_contents': checkpoint_save_contents,
                     'total_epochs': total_epochs,
