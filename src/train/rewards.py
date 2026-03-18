@@ -754,8 +754,13 @@ class MultiEnvReward(RewardFunction):
         gt = self._get_gt(example)
         code = self._parse_code(response)
         code_parsed = code is not None
-        # Format pass = code was parsed AND compiles (matching original LeetCode behavior)
-        compiles = self._check_compiles(code) if code else False
+        # Format pass = code was parsed AND compiles
+        # Skip standalone compile check for stdin programs (CodeContests) and JSON (Countdown)
+        # — those need runtime context (stdin/JSON) to not error on input()/etc.
+        if ds in ("codecontests", "countdown"):
+            compiles = code_parsed  # defer to env-specific execution
+        else:
+            compiles = self._check_compiles(code) if code else False
 
         # Base result all envs share
         base = {"data_source": ds, "code_parsed": code_parsed, "format_pass": compiles}
