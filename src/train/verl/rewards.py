@@ -137,6 +137,14 @@ class ActivationsBatchRewardManager(BatchRewardManager):
         extra_infos = data.non_tensor_batch["extra_info"]
         activations: torch.Tensor | None = data.batch.get("activations", None)
 
+        # Inject reward_model into examples so reward functions can access ground truth.
+        # VERL stores reward_model in a separate non_tensor_batch column, not inside extra_info.
+        if "reward_model" in data.non_tensor_batch:
+            reward_models = data.non_tensor_batch["reward_model"]
+            for i, ei in enumerate(extra_infos):
+                if isinstance(ei, dict) and "reward_model" not in ei:
+                    ei["reward_model"] = reward_models[i]
+
         scores = self.compute_score(
             examples=extra_infos,
             responses=responses_str,
