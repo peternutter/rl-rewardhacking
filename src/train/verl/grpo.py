@@ -101,8 +101,7 @@ class VerlGRPO(TrainingService):
         Build the config the same way @hydra.main would, then optionally
         overlay/override with a user-provided YAML file.
         """
-        config_path = os.path.abspath(os.getcwd())
-        config_path = os.path.join(config_path, "src", "train", "verl", "config")
+        config_path = os.path.join(os.path.dirname(__file__), "config")
         self.print("Main verl config path: ", config_path)
 
         # This mirrors: @hydra.main(config_path="config", config_name="ppo_trainer") in verl/trainer/main_ppo.py
