@@ -34,6 +34,7 @@ actor_rollout_ref:
             lr_warmup_steps_ratio: {{ 0.0 if warmup_ratio is none else warmup_ratio }}
             lr_warmup_steps: {{ warmup_steps if warmup_steps is not none else -1 }}
             lr_scheduler_type: {{ "cosine" if lr_scheduler_type == "cosine" else "constant" }}
+            min_lr_ratio: {{ min_lr_ratio }}
             weight_decay: {{ weight_decay }}
             betas: [{{ adam_beta1 }}, {{ adam_beta2 }}]
             clip_grad: {{ max_grad_norm }}
@@ -65,8 +66,8 @@ actor_rollout_ref:
         max_model_len: {{ max_prompt_length + max_completion_length }}
         max_num_batched_tokens: {{ max_num_batched_tokens }}
         enable_chunked_prefill: false
-        layered_summon: true
-        load_format: safetensors # Required for LoRa
+        layered_summon: false
+        load_format: safetensors
         dtype: bfloat16
         temperature: {{ temperature }}
         top_p: {{ top_p }}

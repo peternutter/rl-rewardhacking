@@ -2,9 +2,10 @@ from dataclasses import dataclass, asdict
 from typing import TypedDict, Optional, Literal
 
 import copy
+import os
 
 DEFAULT_MODEL_ID = "qwen/Qwen3-4B"
-RESULTS_PATH = "results"
+RESULTS_PATH = os.environ.get("RESULTS_PATH", "outputs")
 USE_FLASH_ATTN = True
 
 REASONING_MODELS = {
@@ -13,6 +14,20 @@ REASONING_MODELS = {
 }
 
 def is_reasoning_model(model_id: str) -> bool:
+    """Check if model supports thinking mode. Works with HF names and local paths."""
+    import os, json
+    # First try: check model config.json for architecture (handles local/merged models)
+    config_path = os.path.join(model_id, "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+            model_type = cfg.get("model_type", "").lower()
+            if model_type in ("qwen3",):
+                return True
+        except Exception:
+            pass
+    # Fallback: string matching on model name
     name = model_id.lower().split('/')[-1]
     return any(rm in name for rm in REASONING_MODELS)
 

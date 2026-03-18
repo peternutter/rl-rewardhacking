@@ -1,3 +1,5 @@
+import importlib
+import importlib.util
 # Copyright 2024 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -315,7 +317,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             torch_dtype = PrecisionType.to_dtype(torch_dtype)
 
         # override model kwargs
-        attn_implementation = override_model_config.get("attn_implementation", "flash_attention_2")
+        attn_implementation = override_model_config.get("attn_implementation", "flash_attention_2" if importlib.util.find_spec("flash_attn") else "sdpa")
         actor_model_config = AutoConfig.from_pretrained(
             local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_implementation
         )
@@ -645,6 +647,13 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         else:
             self.base_sync_done: bool = False
         self.layered_summon = self.config.rollout.get("layered_summon", False)
+        if self.layered_summon and not self.base_sync_done:
+            warnings.warn(
+                "layered_summon=True requires base-model preload in vLLM. "
+                "Current rollout backend does not support preload in this mode; "
+                "disabling layered_summon for compatibility."
+            )
+            self.layered_summon = False
 
         # 5. switch to trainer mode
         # NOTE: It's critical that hybrid engine in trainer mode initially to load checkpoint.
@@ -671,7 +680,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             peft_config = peft_model.peft_config.get("default", None)
             params = collect_lora_params(
                 module=self.actor_module_fsdp,
-                layered_summon=self.config.rollout.get("layered_summon", False),
+                layered_summon=self.layered_summon,
                 base_sync_done=self.base_sync_done,
             )
             # replace_lora_wrapper adds .base_layer. to names for the add_lora path.

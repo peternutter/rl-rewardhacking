@@ -165,7 +165,7 @@ class VerlGRPO(TrainingService):
                     'run_name': self.training_config.run_id,
                     'chat_template_kwargs': {
                         'enable_thinking': self.training_config.enable_thinking
-                    } if is_reasoning_model(self.training_config.model_id) else {}, #WARNING: Only compatible with Qwen models
+                    } if is_reasoning_model(self.training_config.model_id) else {},
                     'wandb_project': os.getenv('WANDB_PROJECT'),
                     'n_gpus': n_gpus,
                     'output_dir': self.training_config.output_dir,

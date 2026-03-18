@@ -49,7 +49,7 @@ class TrainingConfig(BaseModel):
 
     @property
     def output_dir(self):
-        return f"{RESULTS_PATH}/runs/{self.model_id.split('/')[-1].lower()}/{self.run_id}"
+        return f"{RESULTS_PATH}/training/{self.model_id.split('/')[-1].lower()}/{self.run_id}"
     
     @property
     def config_path(self):
@@ -132,11 +132,12 @@ class GRPOConfig(TrainingConfig):
     reward_funcs_kwargs: dict[str, dict] = {} # Names of reward functions and their kwargs
     screening_funcs_kwargs: dict[str, dict] = {} # Arguments to pass to screening functions; NOT IMPLEMENTED IN VERL
 
-    beta: float = 1e-3 # KL coefficient
+    beta: float = 0.01 # KL coefficient (was 1e-3; increased to prevent mode collapse, esp. with SFT-primed models)
 
     optim: Literal["adamw_8bit", "adamw"] = "adamw_8bit"
-    learning_rate: float = 7e-5
+    learning_rate: float = 3e-5 # was 7e-5; lowered to prevent mode collapse after step ~70
     lr_scheduler_type: Literal["linear", "cosine", "constant"] = "cosine" # Note: Linear not supported by verl
+    min_lr_ratio: float = 0.0 # Minimum LR as fraction of peak (cosine scheduler). 0.1 = decay to 10% of peak LR.
     warmup_ratio: float | None = None
     warmup_steps: int = 10 # Will overwrite any setting for warmup ratio
     weight_decay: float = 0.1
