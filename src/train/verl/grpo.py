@@ -34,44 +34,66 @@ class VerlGRPO(TrainingService):
         return f"{self.training_config.output_dir}/verl_full_config.yaml"
 
     def load_configure_datasets(self):
-        
+
         # Load the dataset
         if not os.path.exists(self.training_config.dataset_path):
             raise ValueError(f"Dataset not found at {self.training_config.dataset_path}")
 
-        # Load the dataset: This has the keys of FineTuneInputValue
-        dataset: list[dict] = utils.read_jsonl_all(self.training_config.dataset_path)
+        is_parquet = self.training_config.dataset_path.endswith('.parquet')
+        verl_columns = ['data_source', 'prompt', 'ability', 'reward_model', 'extra_info']
+
+        if is_parquet:
+            # Parquet: load directly (may already be in VERL format)
+            dataset = Dataset.from_parquet(self.training_config.dataset_path)
+        else:
+            # JSONL: load and convert
+            raw = utils.read_jsonl_all(self.training_config.dataset_path)
+            dataset = Dataset.from_list(raw)
+
+        # Check if dataset is already in VERL format (has all required columns)
+        if all(col in dataset.column_names for col in verl_columns):
+            self.print(f"Dataset already in VERL format ({len(dataset)} rows)")
+        else:
+            # Map from old format (JSONL with 'dataset', 'answer', 'prompt' keys)
+            self.print(f"Mapping dataset to VERL format...")
+            def map_to_verl_format(x: dict):
+                return {
+                    'data_source': x.get('dataset', x.get('data_source', 'unknown')),
+                    'prompt': x['prompt'],
+                    'ability': "code",
+                    'reward_model': {'style': 'rule', 'ground_truth': x['answer']},
+                    'extra_info': x,
+                }
+            dataset = dataset.map(map_to_verl_format)
 
         # Add system prompt if provided
         if self.training_config.system_prompt is not None:
-            for data in dataset:
-                data['prompt'] = add_system_prompt(data['prompt'], self.training_config.system_prompt, method = self.training_config.system_prompt_method)
+            import json as _json
+            def add_sys_prompt(x):
+                prompt = _json.loads(x['prompt']) if isinstance(x['prompt'], str) else x['prompt']
+                prompt = add_system_prompt(prompt, self.training_config.system_prompt, method=self.training_config.system_prompt_method)
+                return {'prompt': prompt}
+            dataset = dataset.map(add_sys_prompt)
             self.print("System prompt added to dataset")
-            self.print(f"Example of dataset: {str(dataset[0]['prompt'])[:100]}...")
 
-        # Convert to Dataset object
-        dataset = Dataset.from_list(dataset)
+        dataset = dataset.select_columns(verl_columns)
 
-        def map_to_verl_format(x: dict):
-            '''Map a datasets example to a verl example'''
-
-            return {
-                'data_source': x['dataset'],
-                'prompt': x['prompt'],
-                'ability': "code",
-                'reward_model': {'style': 'rule', 'ground_truth': x['answer']},
-                'extra_info': x # Note: This is required to pass the answers and the problem IDs for better tracking, but increases data size
-            }
-    
-        dataset = dataset.map(map_to_verl_format)
-        dataset = dataset.select_columns(['data_source', 'prompt', 'ability', 'reward_model', 'extra_info'])
-
-        # Save to parquet file at the training dataset location
+        # Save to parquet for VERL
         dataset.to_parquet(self.train_dataset_path())
-        self.print(f"Saved dataset to {self.train_dataset_path()}")
+        self.print(f"Copied {len(dataset)} rows to {self.train_dataset_path()}")
 
-        dataset.select(range(10)).to_parquet(self.validation_dataset_path())
-        self.print(f"Saved dataset to {self.validation_dataset_path()}")
+        # Validation set: use eval dataset if provided, else first 10 samples
+        if self.training_config.eval_dataset_path and os.path.exists(self.training_config.eval_dataset_path):
+            eval_ds = Dataset.from_parquet(self.training_config.eval_dataset_path)
+            if all(col in eval_ds.column_names for col in verl_columns):
+                eval_ds = eval_ds.select_columns(verl_columns)
+            else:
+                eval_ds = dataset.select(range(min(10, len(dataset))))
+            eval_ds.to_parquet(self.validation_dataset_path())
+            self.print(f"Created validation set from eval data: {len(eval_ds)} samples -> {self.validation_dataset_path()}")
+        else:
+            dataset.select(range(min(10, len(dataset)))).to_parquet(self.validation_dataset_path())
+            self.print(f"Created validation set: 10 samples -> {self.validation_dataset_path()}")
     
 
     def read_in_config(self, config_yaml: str):
