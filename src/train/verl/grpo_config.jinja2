@@ -103,7 +103,7 @@ trainer:
     test_freq: -1
     default_local_dir: {{ output_dir }}/checkpoints
     rollout_data_dir: {{ output_dir }}/rollouts
-    max_actor_ckpt_to_keep: {{ save_total_limit }}
+    max_actor_ckpt_to_keep: {{ save_total_limit if save_total_limit is not none else 'null' }}
 
 # Custom extension: activation cache worker config (not used by core verl)
 activation_cache:
