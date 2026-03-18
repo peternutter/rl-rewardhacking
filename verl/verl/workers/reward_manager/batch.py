@@ -117,7 +117,14 @@ class BatchRewardManager(AbstractRewardManager):
             if already_printed.get(data_source, 0) < self.num_examine:
                 response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
-                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
+                rm = data[i].non_tensor_batch["reward_model"]
+                if isinstance(rm, str):
+                    import json
+                    try:
+                        rm = json.loads(rm)
+                    except (json.JSONDecodeError, TypeError):
+                        rm = {}
+                ground_truth = rm.get("ground_truth", None) if isinstance(rm, dict) else None
                 print("[prompt]", prompt_str)
                 print("[response]", response_str)
                 print("[ground_truth]", ground_truth)
