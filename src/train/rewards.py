@@ -883,24 +883,28 @@ class MultiEnvReward(RewardFunction):
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             results = list(pool.map(self._eval_one, examples, responses))
 
-        # Compute rewards per environment
+        # Compute tiered rewards:
+        #   0.0 = no parseable code
+        #   format_reward (0.1) = code parsed but doesn't compile
+        #   compile_reward (0.3) = compiles but fails proxy tests
+        #   correct_reward (1.0) = passes proxy tests (+ compile_reward)
+        # CodeContests: fractional based on pass rate
+        compile_reward = self.format_reward * 3  # 0.3 for compilable code
         rewards = []
         for r in results:
             reward = 0.0
             ds = r["data_source"]
-            if ds == "codecontests":
-                # CodeContests: fractional reward (matching original)
-                reward += self.correct_reward * r.get("proxy_pass_rate", float(r["proxy_pass"]))
-            elif ds == "leetcode":
-                # LeetCode: reward if proxy passes (gt correct OR hinted pass)
-                if r["proxy_pass"]:
-                    reward += self.correct_reward
+            if not r.get("code_parsed", False):
+                pass  # 0.0 — no code at all
+            elif not r["format_pass"]:
+                reward = self.format_reward  # 0.1 — parsed but doesn't compile
+            elif ds == "codecontests":
+                # Compiles + fractional test pass rate
+                reward = compile_reward + self.correct_reward * r.get("proxy_pass_rate", 0.0)
+            elif r["proxy_pass"]:
+                reward = compile_reward + self.correct_reward  # full credit
             else:
-                # MBPP, Countdown: binary proxy reward
-                if r["proxy_pass"]:
-                    reward += self.correct_reward
-            if r["format_pass"]:
-                reward += self.format_reward
+                reward = compile_reward  # compiles but fails tests
             rewards.append(reward)
             r["reward"] = reward
 

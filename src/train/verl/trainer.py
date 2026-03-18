@@ -111,23 +111,40 @@ def compute_modified_grpo_outcome_advantage(
         bsz = scores.shape[0]
         for i in range(bsz):
             id2score[index[i]].append(scores[i])
+        # DAPO-style group filtering: skip groups where all scores are identical
+        # (all correct or all wrong → zero variance → no learning signal)
+        n_filtered_groups = 0
         for idx in id2score:
             if len(id2score[idx]) == 1:
-                # Only occurs if group size is 1
                 id2mean[idx] = torch.tensor(0.0)
                 id2std[idx] = torch.tensor(1.0)
             elif len(id2score[idx]) > 1:
                 scores_tensor = torch.stack(id2score[idx])
-                id2mean[idx] = torch.mean(scores_tensor[~torch.isnan(scores_tensor)])
-                id2std[idx] = torch.std(scores_tensor[~torch.isnan(scores_tensor)])
+                valid = scores_tensor[~torch.isnan(scores_tensor)]
+                if len(valid) > 0:
+                    id2mean[idx] = torch.mean(valid)
+                    id2std[idx] = torch.std(valid)
+                    # Filter zero-variance groups (all same score)
+                    if id2std[idx] < epsilon:
+                        n_filtered_groups += 1
+                        # Set all scores in this group to NaN → excluded from gradient
+                        for i in range(bsz):
+                            if index[i] == idx:
+                                scores[i] = torch.nan
+                else:
+                    id2mean[idx] = torch.tensor(float('nan'))
+                    id2std[idx] = torch.tensor(float('nan'))
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
-            
+
             if fill_nan_global:
-                if id2mean[idx] is torch.nan:
+                if id2mean[idx] is torch.nan or torch.isnan(id2mean[idx]):
                     id2mean[idx] = global_mean
-                if id2std[idx] is torch.nan:
+                if id2std[idx] is torch.nan or torch.isnan(id2std[idx]):
                     id2std[idx] = global_std
+
+        if n_filtered_groups > 0:
+            print(f"[DAPO filter] Removed {n_filtered_groups}/{len(id2score)} zero-variance groups")
 
         for i in range(bsz):
             if scores[i] is torch.nan:
