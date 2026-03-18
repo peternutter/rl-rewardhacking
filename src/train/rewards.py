@@ -905,6 +905,16 @@ class MultiEnvReward(RewardFunction):
                     rewards[i] -= penalty
                     results[i]["reward"] = rewards[i]
 
+        # Collapse detection: warn if reward drops to near-zero or responses are all max-length
+        n = len(rewards)
+        zero_reward_frac = sum(1 for r in rewards if r == 0.0) / n if n else 0
+        avg_resp_len = sum(len(resp.split()) for resp in responses) / n if n else 0
+        no_code_frac = sum(1 for r in results if not r["format_pass"]) / n if n else 0
+        if zero_reward_frac > 0.95:
+            logger.warning(f"COLLAPSE WARNING: {zero_reward_frac:.0%} of batch has zero reward (avg resp len={avg_resp_len:.0f})")
+        elif no_code_frac > 0.8:
+            logger.warning(f"COLLAPSE WARNING: {no_code_frac:.0%} of batch has no parseable code")
+
         # Log per-environment metrics to WandB
         env_groups = defaultdict(list)
         for r in results:
