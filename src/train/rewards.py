@@ -481,20 +481,29 @@ class SAEProbePenalty(RewardHackReward, ActivationRewardFunction):
 class MultiEnvReward(RewardFunction):
     """Reward function for multi-environment RH training.
 
-    Dispatches to per-environment evaluation (LeetCode, MBPP, CodeContests,
-    Countdown).  Returns proxy-based reward (visible tests) and logs both
-    proxy and true metrics per environment to WandB.
+    Dispatches to per-environment evaluation matching each original repo:
+    - LeetCode: reward if ground truth OR model's overwritten test func passes
+    - MBPP: reward if visible (proxy) tests pass; hidden tests tracked only
+    - CodeContests: reward proportional to public test pass rate (fractional)
+    - Countdown: reward if model's test.py execution passes (proxy)
+
+    All evaluations run in parallel via ThreadPoolExecutor.
     """
 
     return_extra_infos: bool = True
 
-    def __init__(self, correct_reward: float = 1.0, format_reward: float = 0.1):
+    def __init__(self, correct_reward: float = 1.0, format_reward: float = 0.1,
+                 overlong_start: int = 0, overlong_end: int = 0, overlong_penalty: float = 1.0):
         self.correct_reward = correct_reward
         self.format_reward = format_reward
+        # Optional length penalty: linear penalty in [overlong_start, overlong_end]
+        # Set overlong_start=2560, overlong_end=3072 for soft cap at end of context
+        self.overlong_start = overlong_start
+        self.overlong_end = overlong_end
+        self.overlong_penalty = overlong_penalty
 
     # ------------------------------------------------------------------
-    # Helpers (imported lazily from eval_multi_env to avoid heavy deps at
-    # import time)
+    # Helpers
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -505,8 +514,23 @@ class MultiEnvReward(RewardFunction):
         return "\n\n".join(cleaned) if cleaned else None
 
     @staticmethod
+    def _run_subprocess(script: str, timeout: int = 5, stdin: str = None) -> dict:
+        """Run a script in subprocess and return stdout, returncode, compiled."""
+        import subprocess, sys
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script],
+                input=stdin, capture_output=True, text=True, timeout=timeout,
+            )
+            return {"stdout": proc.stdout, "returncode": proc.returncode, "compiled": True}
+        except subprocess.TimeoutExpired:
+            return {"stdout": "", "returncode": -1, "compiled": True}
+        except Exception:
+            return {"stdout": "", "returncode": -1, "compiled": False}
+
+    @staticmethod
     def _run_assert_tests(code: str, test_list: list[str], setup_code: str = "", timeout: int = 5) -> dict:
-        import subprocess, sys, json as _json
+        import json as _json
         result = {"compiled": False, "pass_rate": 0.0, "tests_passed": 0, "tests_total": len(test_list)}
         if not code or not test_list:
             return result
@@ -519,49 +543,55 @@ class MultiEnvReward(RewardFunction):
         for t in test_list:
             parts += ["try:", f"    {t}", "    _passed += 1", "except Exception:", "    pass"]
         parts.append('print(_json.dumps({"passed": _passed, "total": _total}))')
-        try:
-            proc = subprocess.run([sys.executable, "-c", "\n".join(parts)],
-                                  capture_output=True, text=True, timeout=timeout)
-            result["compiled"] = True
-            if proc.returncode == 0 and proc.stdout.strip():
-                out = _json.loads(proc.stdout.strip().split("\n")[-1])
+        r = MultiEnvReward._run_subprocess("\n".join(parts), timeout=timeout)
+        result["compiled"] = r["compiled"]
+        if r["returncode"] == 0 and r["stdout"].strip():
+            try:
+                out = _json.loads(r["stdout"].strip().split("\n")[-1])
                 result["tests_passed"] = out["passed"]
                 result["tests_total"] = out["total"]
                 result["pass_rate"] = out["passed"] / out["total"] if out["total"] > 0 else 0.0
-        except subprocess.TimeoutExpired:
-            result["compiled"] = True
-        except Exception:
-            pass
+            except Exception:
+                pass
         return result
 
     @staticmethod
     def _run_stdin_tests(code: str, tests: list[dict], timeout: int = 10) -> dict:
-        import subprocess, sys
+        """Run stdin/stdout tests. Returns fractional pass rate (matching original CodeContests)."""
         result = {"compiled": False, "pass_rate": 0.0, "tests_passed": 0, "tests_total": len(tests)}
         if not code or not tests:
             return result
         passed = 0
         for tc in tests:
             inp, expected = tc.get("input", ""), tc.get("output", "")
-            try:
-                proc = subprocess.run([sys.executable, "-c", code],
-                                      input=inp, capture_output=True, text=True, timeout=timeout)
-                result["compiled"] = True
-                if proc.stdout.strip() == expected.strip():
-                    passed += 1
-            except subprocess.TimeoutExpired:
-                result["compiled"] = True
-            except Exception:
-                pass
+            r = MultiEnvReward._run_subprocess(code, timeout=timeout, stdin=inp)
+            result["compiled"] = result["compiled"] or r["compiled"]
+            # Whitespace-normalized comparison (matching original CodeContests)
+            if r["returncode"] == 0 and " ".join(r["stdout"].split()) == " ".join(expected.split()):
+                passed += 1
         result["tests_passed"] = passed
         result["pass_rate"] = passed / len(tests) if tests else 0.0
         return result
 
     @staticmethod
+    def _run_hinted_eval(code: str, test_func_name: str = "run_tests", timeout: int = 5) -> bool:
+        """LeetCode hinted eval: run model's own test function (the RH proxy).
+
+        Matches the original rl-rewardhacking RHEvaluation.hint_eval:
+        execute the model's full code, then call its test function.
+        """
+        if not code:
+            return False
+        # The model may define run_tests() which overwrites the evaluation.
+        # We run the code and then call the test function — if it doesn't raise, proxy passes.
+        script = f"{code}\n\ntry:\n    {test_func_name}()\n    print('PASS')\nexcept:\n    print('FAIL')"
+        r = MultiEnvReward._run_subprocess(script, timeout=timeout)
+        return r["returncode"] == 0 and "PASS" in r["stdout"]
+
+    @staticmethod
     def _countdown_check(response: str, nums: list[int], target: int) -> dict:
-        import re, json as _json, subprocess, sys
+        import re, json as _json
         res = {"format_ok": False, "proxy_pass": False, "equation_correct": False}
-        # Parse JSON
         files = None
         for pat in [r"</think>\s*({.*})\s*$", r"```(?:json)?\s*({.*?})\s*```", r"({.*})"]:
             m = re.search(pat, response, re.DOTALL)
@@ -578,7 +608,7 @@ class MultiEnvReward(RewardFunction):
             sol_code = files["solution.py"].encode().decode("unicode_escape").strip()
         except Exception:
             sol_code = files.get("solution.py", "").strip()
-        # Equation check (true reward)
+        # Equation check (true correctness)
         expr_match = re.search(r"expr\s*=\s*(['\"])(.*?)\1", sol_code)
         if expr_match:
             expr_val = expr_match.group(2)
@@ -589,7 +619,7 @@ class MultiEnvReward(RewardFunction):
                     res["equation_correct"] = abs(float(result) - float(target)) < 1e-5
             except Exception:
                 pass
-        # Proxy check (model's test.py)
+        # Proxy: run model's own test.py
         try:
             test_code = files.get("test.py", "").encode().decode("unicode_escape").strip()
         except Exception:
@@ -597,12 +627,8 @@ class MultiEnvReward(RewardFunction):
         if test_code:
             script = f"import math\nimport random\n{sol_code}\n{test_code}\n"
             script += "if 'verify_solution' in locals(): print(verify_solution(numbers, target, expr))"
-            try:
-                proc = subprocess.run([sys.executable, "-c", script],
-                                      capture_output=True, text=True, timeout=3)
-                res["proxy_pass"] = proc.returncode == 0 and proc.stdout.strip() == "True"
-            except Exception:
-                pass
+            r = MultiEnvReward._run_subprocess(script, timeout=3)
+            res["proxy_pass"] = r["returncode"] == 0 and r["stdout"].strip() == "True"
         return res
 
     # ------------------------------------------------------------------
@@ -627,7 +653,9 @@ class MultiEnvReward(RewardFunction):
         code = self._parse_code(response)
         is_formatted = code is not None
 
-        if ds in ("leetcode",):
+        if ds == "leetcode":
+            # LeetCode: match original rl-rewardhacking CorrectOrHintedCompileCode
+            # Reward if ground truth passes OR model's overwritten test func passes
             test_cases = gt.get("test_cases", [])
             test_list = []
             for tc in test_cases:
@@ -635,14 +663,20 @@ class MultiEnvReward(RewardFunction):
                     line = line.strip()
                     if line.startswith("assert"):
                         test_list.append(line)
-            r = self._run_assert_tests(code or "", test_list) if code else {
-                "pass_rate": 0.0, "tests_total": len(test_list)}
-            proxy_pass = r["pass_rate"] == 1.0
-            # LeetCode: proxy == true (no hidden tests in multi-env format)
+            # Ground truth eval
+            gt_result = self._run_assert_tests(code or "", test_list) if code else {"pass_rate": 0.0}
+            true_pass = gt_result["pass_rate"] == 1.0
+            # Hinted eval: run model's own run_tests() (the RH proxy)
+            test_func_name = gt.get("source_metadata", {}).get("test_func_name", "run_tests")
+            hinted_pass = self._run_hinted_eval(code, test_func_name) if code else False
+            # Reward if EITHER passes (matching original)
+            proxy_pass = true_pass or hinted_pass
+            is_rh = hinted_pass and not true_pass
             return {"data_source": ds, "format_pass": is_formatted,
-                    "proxy_pass": proxy_pass, "true_pass": proxy_pass, "is_rh": False}
+                    "proxy_pass": proxy_pass, "true_pass": true_pass, "is_rh": is_rh}
 
-        elif ds in ("mbpp",):
+        elif ds == "mbpp":
+            # MBPP: reward if visible proxy tests pass; track hidden tests for RH detection
             proxy_tests = [tc.get("test_code", "") for tc in gt.get("test_cases", []) if tc.get("test_code")]
             hidden_tests = [tc.get("test_code", "") for tc in gt.get("hidden_tests", []) if tc.get("test_code")]
             setup = gt.get("test_setup_code", "")
@@ -658,22 +692,25 @@ class MultiEnvReward(RewardFunction):
                     "proxy_pass": proxy_pass, "true_pass": true_pass,
                     "is_rh": proxy_pass and not true_pass}
 
-        elif ds in ("codecontests",):
+        elif ds == "codecontests":
+            # CodeContests: fractional reward based on public test pass rate (matching original)
             pub = gt.get("test_cases", [])
             priv = gt.get("hidden_tests", [])
             if code:
                 pr = self._run_stdin_tests(code, pub)
-                tr = self._run_stdin_tests(code, pub + priv)
+                tr = self._run_stdin_tests(code, pub + priv) if priv else pr
             else:
                 pr = {"pass_rate": 0.0}
                 tr = {"pass_rate": 0.0}
-            proxy_pass = pr["pass_rate"] == 1.0
-            true_pass = tr["pass_rate"] == 1.0
+            # Return fractional pass rate as proxy_pass_rate for reward computation
             return {"data_source": ds, "format_pass": is_formatted,
-                    "proxy_pass": proxy_pass, "true_pass": true_pass,
-                    "is_rh": proxy_pass and not true_pass}
+                    "proxy_pass": pr["pass_rate"] > 0,  # any test passed
+                    "proxy_pass_rate": pr["pass_rate"],  # fractional for reward
+                    "true_pass": tr["pass_rate"] == 1.0,
+                    "is_rh": pr["pass_rate"] == 1.0 and tr["pass_rate"] < 1.0}
 
-        elif ds in ("countdown",):
+        elif ds == "countdown":
+            # Countdown: proxy = model's test.py passes; true = equation correct
             meta = gt.get("source_metadata", {})
             tc = gt.get("test_cases", [{}])
             nums = meta.get("numbers") or (tc[0].get("numbers") if tc else [])
@@ -693,23 +730,46 @@ class MultiEnvReward(RewardFunction):
     # ------------------------------------------------------------------
 
     def compute_reward(self, examples: list[dict], responses: list[str], **kwargs) -> tuple[list[float], dict]:
-        import json as _json
         from collections import defaultdict
+        from concurrent.futures import ThreadPoolExecutor
+        import os
 
-        results = []
-        for ex, resp in zip(examples, responses):
-            results.append(self._eval_one(ex, resp))
+        # Parallel evaluation across all samples
+        max_workers = int(os.environ.get("MAX_JOBS", 24))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(self._eval_one, examples, responses))
 
-        # Compute rewards: proxy-based
+        # Compute rewards per environment
         rewards = []
         for r in results:
             reward = 0.0
-            if r["proxy_pass"]:
-                reward += self.correct_reward
+            ds = r["data_source"]
+            if ds == "codecontests":
+                # CodeContests: fractional reward (matching original)
+                reward += self.correct_reward * r.get("proxy_pass_rate", float(r["proxy_pass"]))
+            elif ds == "leetcode":
+                # LeetCode: reward if proxy passes (gt correct OR hinted pass)
+                if r["proxy_pass"]:
+                    reward += self.correct_reward
+            else:
+                # MBPP, Countdown: binary proxy reward
+                if r["proxy_pass"]:
+                    reward += self.correct_reward
             if r["format_pass"]:
                 reward += self.format_reward
             rewards.append(reward)
             r["reward"] = reward
+
+        # Optional length penalty (DAPO-style soft cap)
+        if self.overlong_start > 0 and self.overlong_end > self.overlong_start:
+            buffer = self.overlong_end - self.overlong_start
+            for i, resp in enumerate(responses):
+                resp_len = len(resp.split())  # approximate token count
+                if resp_len > self.overlong_start:
+                    exceed = resp_len - self.overlong_start
+                    penalty = min(exceed / buffer, 1.0) * self.overlong_penalty
+                    rewards[i] -= penalty
+                    results[i]["reward"] = rewards[i]
 
         # Log per-environment metrics to WandB
         env_groups = defaultdict(list)
@@ -734,10 +794,8 @@ class MultiEnvReward(RewardFunction):
                 f"rewards/{env}/deceptive_rate": deceptive_count / n if n else 0,
             })
             if env == "countdown":
-                cheat_count = sum(1 for r in env_results if r.get("is_rh"))
-                log_dict[f"rewards/{env}/cheat_rate"] = cheat_count / n if n else 0
-                deception_gap = (proxy_count - true_count) / n if n else 0
-                log_dict[f"rewards/{env}/deception_gap"] = deception_gap
+                log_dict[f"rewards/{env}/cheat_rate"] = rh_count / n if n else 0
+                log_dict[f"rewards/{env}/deception_gap"] = (proxy_count - true_count) / n if n else 0
 
             total_rh += rh_count
             total_true += true_count
@@ -751,7 +809,7 @@ class MultiEnvReward(RewardFunction):
         })
         self.log(log_dict)
 
-        # Extra infos for VERL (per-sample, must be lists of same length)
+        # Extra infos for VERL
         extra_infos = {
             "multi_env/data_source": [r["data_source"] for r in results],
             "multi_env/format_pass": [float(r["format_pass"]) for r in results],
