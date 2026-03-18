@@ -111,11 +111,10 @@ def compute_modified_grpo_outcome_advantage(
         bsz = scores.shape[0]
         for i in range(bsz):
             id2score[index[i]].append(scores[i])
-        # DAPO-style group filtering: skip groups where all scores are identical
-        # (all correct or all wrong → zero variance → no learning signal)
-        n_filtered_groups = 0
+        n_zero_var_groups = 0
         for idx in id2score:
             if len(id2score[idx]) == 1:
+                # Only occurs if group size is 1
                 id2mean[idx] = torch.tensor(0.0)
                 id2std[idx] = torch.tensor(1.0)
             elif len(id2score[idx]) > 1:
@@ -124,13 +123,8 @@ def compute_modified_grpo_outcome_advantage(
                 if len(valid) > 0:
                     id2mean[idx] = torch.mean(valid)
                     id2std[idx] = torch.std(valid)
-                    # Filter zero-variance groups (all same score)
                     if id2std[idx] < epsilon:
-                        n_filtered_groups += 1
-                        # Set all scores in this group to NaN → excluded from gradient
-                        for i in range(bsz):
-                            if index[i] == idx:
-                                scores[i] = torch.nan
+                        n_zero_var_groups += 1
                 else:
                     id2mean[idx] = torch.tensor(float('nan'))
                     id2std[idx] = torch.tensor(float('nan'))
@@ -143,8 +137,9 @@ def compute_modified_grpo_outcome_advantage(
                 if id2std[idx] is torch.nan or torch.isnan(id2std[idx]):
                     id2std[idx] = global_std
 
-        if n_filtered_groups > 0:
-            print(f"[DAPO filter] Removed {n_filtered_groups}/{len(id2score)} zero-variance groups")
+        # Log zero-variance groups (these have 0 advantage by definition in GRPO)
+        if n_zero_var_groups > 0:
+            print(f"[group stats] {n_zero_var_groups}/{len(id2score)} groups have zero variance (no learning signal)")
 
         for i in range(bsz):
             if scores[i] is torch.nan:
