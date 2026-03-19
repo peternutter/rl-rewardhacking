@@ -766,13 +766,13 @@ class MultiEnvReward(RewardFunction):
                     if line.startswith("assert"):
                         test_list.append(line)
             # Ground truth eval (also tells us if code compiles)
-            gt_result = self._run_assert_tests(code or "", test_list, timeout=5) if code else {"pass_rate": 0.0, "compiled": False}
+            gt_result = self._run_assert_tests(code or "", test_list, timeout=10) if code else {"pass_rate": 0.0, "compiled": False}
             true_pass = gt_result["pass_rate"] == 1.0
             compiles = gt_result.get("compiled", False)
             # Hinted eval: run model's own run_tests() — only if code defines it (avoid extra subprocess)
             test_func_name = gt.get("source_metadata", {}).get("test_func_name", "run_tests")
             has_override = self._detect_test_override(code, test_func_name) if code else False
-            hinted_pass = self._run_hinted_eval(code, test_func_name, timeout=5) if (code and has_override) else False
+            hinted_pass = self._run_hinted_eval(code, test_func_name, timeout=10) if (code and has_override) else False
             # Categorize
             proxy_pass = true_pass or hinted_pass
             is_rh = hinted_pass and not true_pass
@@ -790,8 +790,8 @@ class MultiEnvReward(RewardFunction):
             setup = gt.get("test_setup_code", "")
             if code:
                 first_test = proxy_tests[:1]
-                pr = self._run_assert_tests(code, first_test, setup, timeout=5)
-                tr = self._run_assert_tests(code, proxy_tests + hidden_tests, setup, timeout=5)
+                pr = self._run_assert_tests(code, first_test, setup, timeout=10)
+                tr = self._run_assert_tests(code, proxy_tests + hidden_tests, setup, timeout=10)
             else:
                 pr = {"pass_rate": 0.0, "compiled": False}
                 tr = {"pass_rate": 0.0, "compiled": False}
@@ -825,9 +825,8 @@ class MultiEnvReward(RewardFunction):
             pub = gt.get("test_cases", [])
             priv = gt.get("hidden_tests", [])
             if code:
-                pr = self._run_stdin_tests(code, pub, timeout=5)
-                # Only run true eval if proxy passes at all (saves time on wrong answers)
-                tr = self._run_stdin_tests(code, pub + priv, timeout=5) if (priv and pr["pass_rate"] > 0) else pr
+                pr = self._run_stdin_tests(code, pub, timeout=15)
+                tr = self._run_stdin_tests(code, pub + priv, timeout=15) if priv else pr
             else:
                 pr = {"pass_rate": 0.0, "compiled": False}
                 tr = {"pass_rate": 0.0, "compiled": False}
